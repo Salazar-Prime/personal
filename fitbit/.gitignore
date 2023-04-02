@@ -1,5 +1,7 @@
 # USER SETTINGS
 config.json
+logs
+tokens.json
 
 ############################################
 
