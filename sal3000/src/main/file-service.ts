@@ -1,4 +1,11 @@
-import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
+import {
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+  writeFileSync
+} from 'node:fs'
 import { relative, resolve, sep } from 'node:path'
 import type { FileEntry, FilePreview } from '../shared/types'
 
@@ -54,4 +61,13 @@ export function previewLocalFile(root: string, requested: string): FilePreview {
     truncated: stat.size > PREVIEW_LIMIT,
     binary
   }
+}
+
+export function writeLocalFile(root: string, requested: string, content: string): void {
+  const filePath = boundedPath(root, requested)
+  if (!statSync(filePath).isFile()) throw new Error('The requested path is not a file.')
+  if (Buffer.byteLength(content, 'utf8') > PREVIEW_LIMIT) {
+    throw new Error('PanePilot only edits files up to 1 MB.')
+  }
+  writeFileSync(filePath, content, 'utf8')
 }

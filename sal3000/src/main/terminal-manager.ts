@@ -50,6 +50,16 @@ function remoteHasTmux(alias: string): boolean {
   return result.status === 0 && Boolean(result.stdout.trim())
 }
 
+function tmuxSessionName(name: string, suffix = Math.random().toString(36).slice(2, 8)): string {
+  const slug =
+    name
+      .toLocaleLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 42) || 'terminal'
+  return `panepilot-${slug}-${suffix}`
+}
+
 function launchCommand(profile: LaunchProfile, customCommand: string | null, dangerous: boolean): string {
   if (profile === 'shell') return 'exec "${SHELL:-/bin/sh}" -l'
   if (profile === 'custom') {
@@ -85,9 +95,6 @@ export class TerminalManager {
       connection.kind === 'local'
         ? Boolean(this.tmuxPath)
         : remoteHasTmux(connection.sshAlias ?? connection.name)
-    const tmuxName = tmuxAvailable
-      ? `panepilot-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-      : null
     const profileLabel =
       input.profile === 'shell'
         ? basename(process.env.SHELL || 'Shell')
@@ -99,9 +106,11 @@ export class TerminalManager {
     const sameProfileCount = project.sessions.filter(
       (session) => session.profile === input.profile
     ).length
+    const sessionName = input.name?.trim() || `${profileLabel} ${sameProfileCount + 1}`
+    const tmuxName = tmuxAvailable ? tmuxSessionName(sessionName) : null
     const session = this.store.createSession({
       projectId: input.projectId,
-      name: input.name?.trim() || `${profileLabel} ${sameProfileCount + 1}`,
+      name: sessionName,
       profile: input.profile,
       customCommand: input.customCommand?.trim() || null,
       backend: tmuxAvailable ? 'tmux' : 'pty',
@@ -162,7 +171,48 @@ export class TerminalManager {
   rename(sessionId: string, name: string): void {
     const cleaned = name.trim()
     if (!cleaned) throw new Error('Terminal name cannot be empty.')
-    this.store.renameSession(sessionId, cleaned)
+    const session = this.requireSession(sessionId)
+    let tmuxName = session.tmuxName
+    if (session.backend === 'tmux' && session.tmuxName) {
+      const suffix = session.tmuxName.split('-').at(-1) || session.id.slice(0, 6)
+      const renamedTmux = tmuxSessionName(cleaned, suffix)
+      if (!['completed', 'error'].includes(session.state)) {
+        const project = this.store.getProject(session.projectId)
+        const connection = project ? this.store.getConnection(project.connectionId) : null
+        if (!connection) throw new Error('Project connection not found.')
+        const result =
+          connection.kind === 'local'
+            ? this.tmuxPath
+              ? spawnSync(
+                  this.tmuxPath,
+                  ['rename-session', '-t', session.tmuxName, renamedTmux],
+                  { encoding: 'utf8', timeout: 3_000 }
+                )
+              : null
+            : spawnSync(
+                'ssh',
+                [
+                  '-T',
+                  '-o',
+                  'BatchMode=yes',
+                  '-o',
+                  'ConnectTimeout=5',
+                  connection.sshAlias ?? connection.name,
+                  `tmux rename-session -t ${quote(session.tmuxName)} ${quote(renamedTmux)}`
+                ],
+                { encoding: 'utf8', timeout: 7_000 }
+              )
+        if (!result || result.error || result.status !== 0) {
+          const detail = result?.error?.message || result?.stderr?.trim()
+          throw new Error(detail || 'Could not rename the persistent tmux session.')
+        }
+      }
+      tmuxName = renamedTmux
+    }
+    this.store.renameSession(sessionId, cleaned, tmuxName)
+    const runtime = this.runtimes.get(sessionId)
+    const latest = this.store.getSession(sessionId)
+    if (runtime && latest) runtime.session = latest
   }
 
   stop(sessionId: string): void {
@@ -313,7 +363,7 @@ export class TerminalManager {
 
   private scheduleScreenScan(runtime: Runtime): void {
     if (!runtime.detector) return
-    if (runtime.scanTimer) clearTimeout(runtime.scanTimer)
+    if (runtime.scanTimer) return
     runtime.scanTimer = setTimeout(() => {
       runtime.scanTimer = null
       const buffer = runtime.screen.buffer.active
@@ -333,7 +383,7 @@ export class TerminalManager {
             : `${latest.name} finished and needs your attention.`
         this.changeState(latest, nextState, message)
       }
-    }, 450)
+    }, 120)
     runtime.scanTimer.unref()
   }
 

@@ -1,9 +1,16 @@
 import { join } from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import type { CreateProjectInput, StartTerminalInput } from '../shared/types'
-import { listLocalFiles, previewLocalFile } from './file-service'
+import { ConversationIndexer } from './conversation-indexer'
+import { listLocalFiles, previewLocalFile, writeLocalFile } from './file-service'
 import { discoverRepository } from './git'
 import { projectTypeServices } from './project-type-services'
+import {
+  listRemoteFiles,
+  listRemoteFolders,
+  previewRemoteFile,
+  writeRemoteFile
+} from './remote-file-service'
 import { discoverSshAliases } from './ssh-config'
 import { Store } from './store'
 import { TerminalManager } from './terminal-manager'
@@ -11,6 +18,7 @@ import { TerminalManager } from './terminal-manager'
 let mainWindow: BrowserWindow | null = null
 let store: Store
 let terminals: TerminalManager
+let conversations: ConversationIndexer
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -63,6 +71,9 @@ function registerIpc(): void {
       repositoryUrl
     })
   })
+  ipcMain.handle('projects:rename', (_event, projectId: string, name: string) => {
+    store.renameProject(projectId, name)
+  })
   ipcMain.handle('projects:open-repository', async (_event, url: string) => {
     if (!/^https?:\/\//i.test(url)) throw new Error('Only web repository URLs can be opened.')
     await shell.openExternal(url)
@@ -104,20 +115,65 @@ function registerIpc(): void {
     const project = store.getProject(projectId)
     if (!project) throw new Error('Project not found.')
     const connection = store.getConnection(project.connectionId)
-    if (connection?.kind !== 'local') {
-      throw new Error('Remote file browsing is not available in this first build.')
-    }
-    return listLocalFiles(project.folder, relativePath)
+    if (!connection) throw new Error('Project connection not found.')
+    return connection.kind === 'local'
+      ? listLocalFiles(project.folder, relativePath)
+      : listRemoteFiles(connection.sshAlias!, project.folder, relativePath)
   })
   ipcMain.handle('files:preview', (_event, projectId: string, relativePath: string) => {
     const project = store.getProject(projectId)
     if (!project) throw new Error('Project not found.')
     const connection = store.getConnection(project.connectionId)
-    if (connection?.kind !== 'local') {
-      throw new Error('Remote file previews are not available in this first build.')
-    }
-    return previewLocalFile(project.folder, relativePath)
+    if (!connection) throw new Error('Project connection not found.')
+    return connection.kind === 'local'
+      ? previewLocalFile(project.folder, relativePath)
+      : previewRemoteFile(connection.sshAlias!, project.folder, relativePath)
   })
+  ipcMain.handle(
+    'files:save',
+    (_event, projectId: string, relativePath: string, content: string) => {
+      const project = store.getProject(projectId)
+      if (!project) throw new Error('Project not found.')
+      const connection = store.getConnection(project.connectionId)
+      if (!connection) throw new Error('Project connection not found.')
+      if (connection.kind === 'local') {
+        writeLocalFile(project.folder, relativePath, content)
+      } else {
+        writeRemoteFile(connection.sshAlias!, project.folder, relativePath, content)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'remote-folders:list',
+    (_event, connectionId: string, path?: string) => {
+      const connection = store.getConnection(connectionId)
+      if (!connection || connection.kind !== 'ssh' || !connection.sshAlias) {
+        throw new Error('Choose a valid SSH connection.')
+      }
+      return listRemoteFolders(connection.sshAlias, path)
+    }
+  )
+
+  ipcMain.handle('conversations:list', (_event, projectId: string, query = '') => {
+    const project = store.getProject(projectId)
+    if (!project) throw new Error('Project not found.')
+    const connection = store.getConnection(project.connectionId)
+    if (connection?.kind !== 'local') return []
+    return conversations.list(project.folder, query)
+  })
+  ipcMain.handle(
+    'conversations:get',
+    (_event, projectId: string, conversationId: string, query = '') => {
+      const project = store.getProject(projectId)
+      if (!project) throw new Error('Project not found.')
+      const connection = store.getConnection(project.connectionId)
+      if (connection?.kind !== 'local') {
+        throw new Error('Remote conversation archives are not available yet.')
+      }
+      return conversations.get(project.folder, conversationId, query)
+    }
+  )
 }
 
 app
@@ -126,6 +182,7 @@ app
     store = new Store(app.getPath('userData'))
     store.syncConnections(discoverSshAliases())
     terminals = new TerminalManager(store, () => mainWindow)
+    conversations = new ConversationIndexer()
     registerIpc()
     createWindow()
 

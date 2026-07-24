@@ -98,6 +98,36 @@ export interface FilePreview {
   binary: boolean
 }
 
+export type ConversationProvider = 'codex' | 'claude'
+
+export interface ConversationMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  timestamp: string | null
+}
+
+export interface ConversationSummary {
+  id: string
+  provider: ConversationProvider
+  title: string
+  workingDirectory: string
+  updatedAt: string
+  messageCount: number
+  snippet: string
+  matchCount: number
+}
+
+export interface ConversationDetail extends ConversationSummary {
+  messages: ConversationMessage[]
+}
+
+export interface RemoteFolderListing {
+  currentPath: string
+  parentPath: string | null
+  entries: FileEntry[]
+}
+
 export interface ProjectConsoleApi {
   connections: {
     list(): Promise<Connection[]>
@@ -105,6 +135,7 @@ export interface ProjectConsoleApi {
   projects: {
     list(): Promise<Project[]>
     create(input: CreateProjectInput): Promise<Project>
+    rename(projectId: string, name: string): Promise<void>
     chooseFolder(): Promise<string | null>
     openRepository(url: string): Promise<void>
   }
@@ -125,5 +156,13 @@ export interface ProjectConsoleApi {
   files: {
     list(projectId: string, relativePath?: string): Promise<FileEntry[]>
     preview(projectId: string, relativePath: string): Promise<FilePreview>
+    save(projectId: string, relativePath: string, content: string): Promise<void>
+  }
+  remoteFolders: {
+    list(connectionId: string, path?: string): Promise<RemoteFolderListing>
+  }
+  conversations: {
+    list(projectId: string, query?: string): Promise<ConversationSummary[]>
+    get(projectId: string, conversationId: string, query?: string): Promise<ConversationDetail>
   }
 }

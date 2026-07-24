@@ -290,6 +290,18 @@ export class Store {
     return this.getProject(id)!
   }
 
+  renameProject(id: string, name: string): void {
+    const cleaned = name.trim()
+    const project = this.getProject(id)
+    if (!project) throw new Error('Project not found.')
+    if (!cleaned) throw new Error('Project name cannot be empty.')
+    if (cleaned === project.name) return
+    this.db
+      .prepare('UPDATE projects SET name = ?, updated_at = ? WHERE id = ?')
+      .run(cleaned, now(), id)
+    this.addActivity(id, null, 'project-renamed', `Renamed project to ${cleaned}`)
+  }
+
   getProject(id: string): Project | null {
     const row = this.db
       .prepare(
@@ -443,11 +455,27 @@ export class Store {
     return true
   }
 
-  renameSession(id: string, name: string): void {
+  renameSession(id: string, name: string, tmuxName?: string | null): void {
     const session = this.requireSession(id)
-    this.db
-      .prepare('UPDATE terminal_sessions SET name = ?, updated_at = ? WHERE id = ?')
-      .run(name, now(), id)
+    const timestamp = now()
+    if (this.tableColumns('terminal_sessions').has('label')) {
+      this.db
+        .prepare(
+          `UPDATE terminal_sessions
+           SET name = ?, label = ?, tmux_name = COALESCE(?, tmux_name),
+               backend_name = COALESCE(?, backend_name), updated_at = ?
+           WHERE id = ?`
+        )
+        .run(name, name, tmuxName ?? null, tmuxName ?? null, timestamp, id)
+    } else {
+      this.db
+        .prepare(
+          `UPDATE terminal_sessions
+           SET name = ?, tmux_name = COALESCE(?, tmux_name), updated_at = ?
+           WHERE id = ?`
+        )
+        .run(name, tmuxName ?? null, timestamp, id)
+    }
     this.addActivity(session.projectId, id, 'terminal-renamed', `Renamed terminal to ${name}`)
   }
 

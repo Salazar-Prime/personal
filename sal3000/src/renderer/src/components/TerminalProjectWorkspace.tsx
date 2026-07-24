@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Archive,
   Files,
   History,
+  MessageSquareText,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -13,13 +15,14 @@ import {
 } from 'lucide-react'
 import type { TerminalSession } from '@shared/types'
 import type { ProjectWorkspaceProps } from '../projectTypeRegistry'
+import { ChatHistoryPanel } from './ChatHistoryPanel'
 import { FilesPanel } from './FilesPanel'
 import { HistoryPanel } from './HistoryPanel'
 import { ManagedTerminal } from './ManagedTerminal'
 import { StatusDot } from './StatusDot'
 import { TerminalLauncher } from './TerminalLauncher'
 
-type WorkspaceTab = 'terminal' | 'files' | 'history'
+type WorkspaceTab = 'terminal' | 'files' | 'chats' | 'history'
 
 export function TerminalProjectWorkspace({
   project,
@@ -29,7 +32,9 @@ export function TerminalProjectWorkspace({
 }: ProjectWorkspaceProps) {
   const [tab, setTab] = useState<WorkspaceTab>('terminal')
   const [showLauncher, setShowLauncher] = useState(false)
-  const [menuSessionId, setMenuSessionId] = useState<string | null>(null)
+  const [menu, setMenu] = useState<{ sessionId: string; top: number; left: number } | null>(
+    null
+  )
   const visibleSessions = useMemo(
     () => project.sessions.filter((session) => !session.archived),
     [project.sessions]
@@ -47,6 +52,23 @@ export function TerminalProjectWorkspace({
     void window.projectConsole.terminals.acknowledge(activeSession.id).then(onChanged)
   }, [activeSession?.id])
 
+  useEffect(() => {
+    if (!menu) return
+    function closeMenu(event: MouseEvent) {
+      const target = event.target as HTMLElement
+      if (!target.closest('.terminal-menu-portal, .tab-menu-button')) setMenu(null)
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') setMenu(null)
+    }
+    document.addEventListener('mousedown', closeMenu)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('mousedown', closeMenu)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [menu])
+
   async function selectSession(id: string) {
     setTab('terminal')
     onSelectSession(id)
@@ -61,7 +83,7 @@ export function TerminalProjectWorkspace({
   }
 
   async function rename(session: TerminalSession) {
-    setMenuSessionId(null)
+    setMenu(null)
     const name = window.prompt('Terminal name', session.name)
     if (!name || name.trim() === session.name) return
     await window.projectConsole.terminals.rename(session.id, name)
@@ -69,14 +91,14 @@ export function TerminalProjectWorkspace({
   }
 
   async function stop(session: TerminalSession) {
-    setMenuSessionId(null)
+    setMenu(null)
     if (!window.confirm(`Stop “${session.name}”? Its saved output will be kept.`)) return
     await window.projectConsole.terminals.stop(session.id)
     await onChanged()
   }
 
   async function archive(session: TerminalSession) {
-    setMenuSessionId(null)
+    setMenu(null)
     await window.projectConsole.terminals.archive(session.id)
     await onChanged()
   }
@@ -109,6 +131,10 @@ export function TerminalProjectWorkspace({
           <Files size={15} />
           Files
         </button>
+        <button className={tab === 'chats' ? 'active' : ''} onClick={() => setTab('chats')}>
+          <MessageSquareText size={15} />
+          LLM Chats
+        </button>
         <button className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>
           <History size={15} />
           Activity
@@ -120,50 +146,37 @@ export function TerminalProjectWorkspace({
           <div className="terminal-tabs">
             <div className="terminal-tabs-scroll">
               {visibleSessions.map((session) => (
-                <button
+                <div
                   key={session.id}
                   className={`terminal-tab ${activeSession?.id === session.id ? 'active' : ''}`}
-                  onClick={() => void selectSession(session.id)}
                 >
-                  <StatusDot state={session.state} compact />
-                  <span>{session.name}</span>
-                  {session.dangerousMode && <small className="unsafe-badge">unsafe</small>}
-                  <span
-                    className="tab-menu"
-                    role="button"
-                    tabIndex={0}
+                  <button
+                    className="terminal-tab-select"
+                    onClick={() => void selectSession(session.id)}
+                  >
+                    <StatusDot state={session.state} compact />
+                    <span>{session.name}</span>
+                    {session.dangerousMode && <small className="unsafe-badge">unsafe</small>}
+                  </button>
+                  <button
+                    className="tab-menu-button"
+                    aria-label={`Actions for ${session.name}`}
                     onClick={(event) => {
-                      event.stopPropagation()
-                      setMenuSessionId(menuSessionId === session.id ? null : session.id)
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') setMenuSessionId(session.id)
+                      const bounds = event.currentTarget.getBoundingClientRect()
+                      setMenu((current) =>
+                        current?.sessionId === session.id
+                          ? null
+                          : {
+                              sessionId: session.id,
+                              top: bounds.bottom + 5,
+                              left: Math.max(8, bounds.right - 150)
+                            }
+                      )
                     }}
                   >
                     <MoreHorizontal size={14} />
-                  </span>
-                  {menuSessionId === session.id && (
-                    <span className="popover-menu" onClick={(event) => event.stopPropagation()}>
-                      <button onClick={() => void rename(session)}>
-                        <Pencil size={14} /> Rename
-                      </button>
-                      {!['completed', 'error'].includes(session.state) ? (
-                        <button className="danger-text" onClick={() => void stop(session)}>
-                          <Square size={13} /> Stop
-                        </button>
-                      ) : (
-                        <>
-                          <button onClick={() => void archive(session)}>
-                            <Archive size={14} /> Archive
-                          </button>
-                          <button className="danger-text" onClick={() => void permanentlyDelete(session)}>
-                            <Trash2 size={14} /> Delete
-                          </button>
-                        </>
-                      )}
-                    </span>
-                  )}
-                </button>
+                  </button>
+                </div>
               ))}
             </div>
             <button
@@ -214,7 +227,45 @@ export function TerminalProjectWorkspace({
         </section>
       )}
       {tab === 'files' && <FilesPanel project={project} />}
+      {tab === 'chats' && <ChatHistoryPanel project={project} />}
       {tab === 'history' && <HistoryPanel project={project} />}
+      {menu &&
+        createPortal(
+          <div
+            className="popover-menu terminal-menu-portal"
+            style={{ top: menu.top, left: menu.left }}
+          >
+            {(() => {
+              const session = visibleSessions.find((item) => item.id === menu.sessionId)
+              if (!session) return null
+              return (
+                <>
+                  <button onClick={() => void rename(session)}>
+                    <Pencil size={14} /> Rename
+                  </button>
+                  {!['completed', 'error'].includes(session.state) ? (
+                    <button className="danger-text" onClick={() => void stop(session)}>
+                      <Square size={13} /> Stop
+                    </button>
+                  ) : (
+                    <>
+                      <button onClick={() => void archive(session)}>
+                        <Archive size={14} /> Archive
+                      </button>
+                      <button
+                        className="danger-text"
+                        onClick={() => void permanentlyDelete(session)}
+                      >
+                        <Trash2 size={14} /> Delete
+                      </button>
+                    </>
+                  )}
+                </>
+              )
+            })()}
+          </div>,
+          document.body
+        )}
       {showLauncher && (
         <TerminalLauncher
           projectId={project.id}

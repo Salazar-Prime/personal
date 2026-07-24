@@ -18,6 +18,7 @@ import type { Connection, CreateProjectInput, Project } from '@shared/types'
 import { isAttentionState } from '../lib/status'
 import { projectTypeRegistry } from '../projectTypeRegistry'
 import { NewProjectDialog } from './NewProjectDialog'
+import { ProjectSettingsDialog } from './ProjectSettingsDialog'
 import { StatusDot } from './StatusDot'
 
 export function App() {
@@ -27,6 +28,7 @@ export function App() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [showNewProject, setShowNewProject] = useState(false)
+  const [showProjectSettings, setShowProjectSettings] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -84,6 +86,12 @@ export function App() {
     await refresh()
     setSelectedProjectId(created.id)
     setSelectedSessionId(null)
+  }
+
+  async function renameProject(name: string) {
+    if (!project) return
+    await window.projectConsole.projects.rename(project.id, name)
+    await refresh()
   }
 
   function selectProject(id: string) {
@@ -162,11 +170,14 @@ export function App() {
               <Github size={15} /> Repository
             </button>
           )}
-          <button className="icon-button" aria-label="Settings" title="Settings">
+          <button
+            className="icon-button"
+            aria-label="Project settings"
+            title="Project settings"
+            disabled={!project}
+            onClick={() => setShowProjectSettings(true)}
+          >
             <Settings size={16} />
-          </button>
-          <button className="primary-button header-button" onClick={() => setShowNewProject(true)}>
-            <Plus size={15} /> Project
           </button>
         </div>
       </header>
@@ -307,6 +318,14 @@ export function App() {
           connections={connections}
           onClose={() => setShowNewProject(false)}
           onCreate={createProject}
+        />
+      )}
+      {showProjectSettings && project && (
+        <ProjectSettingsDialog
+          project={project}
+          connection={connection}
+          onClose={() => setShowProjectSettings(false)}
+          onRename={renameProject}
         />
       )}
     </div>
